@@ -450,3 +450,27 @@ server.example.com
 
 [nagios-client]
 client.example.com
+
+===========================================================================================================================================================================
+
+Install and configure nsclient++ on Windows machine for nagios nrpe based remote monitoring
+To install nsclient++ for nrpe based remote monitoring of Windows system use following steps:
+
+Download nsclient++ from https://exchange.nagios.org/directory/Addons/Monitoring-Agents/NSClient++/details#_ga=1.97078301.382761490.1485522039 Avoid downloading latest version from http://nsclient.org/download/ as it has different configuration steps then what is mentioned below.
+Install the package. Use new configuration file. Fill nagios server IP in allowed hosts and leave password blank. Enable common check plugins, Enable nrpe_server (check_nrpe_ and Enable WMI checks.
+Go to "C:\Program Files". Change owner of NSClient++ from System to current user and give full read/write access. We should be able to edit "C:\Program Files\NSClient++\NSC.ini" file.
+Edit "C:\Program Files\NSClient++\NSC.ini" as follows
+Uncomment 'CheckExternalScripts.dll' line
+Ensure that use_file=1 and allowed_hosts=<> has correct IPs of nagios servers. Allowed hosts are provided during package installation.
+Under [nrpe] Uncomment port=5666 and Uncomment allow_arguments=1
+Under [External Scripts] Uncomment all five lines starting with check_
+Stop nsclient++ service using start menu
+Start nsclient++ service using start menu
+Use "netstat -an" to verify that something is listening on port 5666.
+Connect from server using:
+/usr/lib64/nagios/plugins/check_nrpe -H <Windows-IP>
+And things are fine message should appear
+Check few internal services using:
+/usr/lib64/nagios/plugins/check_nrpe -H <Windows-IP> -c alias_cpu
+
+/usr/lib64/nagios/plugins/check_nrpe -H <Windows-IP> -c alias_disk
