@@ -1,0 +1,452 @@
+Server Side
+ssh-keygen -t rsa
+ssh-copy-id root@client.example.com
+ssh-copy-id root@client
+ssh-copy-id root@server.example.com
+
+Client Side
+ssh-keygen -t rsa
+ssh-copy-id root@server
+ssh-copy-id root@server.example.com
+ssh-copy-id root@client.example.com
+
+
+cd /etc/ansible
+vi centos7-playbook.yml
+
+---
+  - name: Playbook for configuring nagios client(s)
+    hosts: nagios-client
+    remote_user: root
+    
+    vars:
+      nagios_server: server.example.com
+
+    tasks:
+    - name: Install epel-release repository
+      yum: name=epel-release state=present
+    
+    - name: Install nrpe, nagios-plugins-all
+      yum: name={{item}} state=present
+      with_items:
+        - nrpe
+        - nagios-plugins-all
+        - openssl
+
+    - name: Configure nagios server IP in nrpe configuration file
+      lineinfile: 
+        dest: /etc/nagios/nrpe.cfg
+        regexp: allowed_hosts=
+        line: allowed_hosts=127.0.0.1,{{nagios_server}} 
+
+    - name: Start nrpe service and enable it on startup
+      service: name=nrpe state=restarted enabled=yes
+
+  
+  - name: Playbook for configuring nagios server including clients and client services monitoring
+    hosts: nagios-server
+    remote_user: root
+
+    vars:
+      nagios_alert_email_id: barjatiya.saurabh@gmail.com 
+      nagiosadmin_password: nagiosadmin
+      nagios_client_details:
+        - { hostname: "test1", alias: "test1", address: client.example.com, services: [ "ping", "ssh" ] }  
+        - { hostname: "web1", alias: "web1", address: client1.example.com, services: [ "ping", "ssh", "http", "nrpe_check_load" ] }  
+        - { hostname: "windows10", alias: "windows10", address: client2.example.com, services: [ "ping", "nrpe_alias_cpu" ] }  
+
+
+    tasks:
+    - name: Install epel-release repository
+      yum: name=epel-release state=present
+    
+    - name: Install nagios, nagios-plugins-all and nrpe packages
+      yum: name={{item}} state=present
+      with_items:
+      - nagios
+      - nagios-plugins-all
+      - nrpe 
+      - nagios-plugins-nrpe
+
+    - name: Configure desried email ID in contacts
+      lineinfile: 
+        dest: /etc/nagios/objects/contacts.cfg
+        regexp: email
+        line: email {{nagios_alert_email_id}} 
+
+    - name: Copy commands.cfg file with check_nrpe command
+      copy: src=commands.cfg dest=/etc/nagios/objects/commands.cfg owner=nagios group=nagios mode=755
+
+    - name: Create nagiosadmin user for httpd access
+      shell: htpasswd -cb /etc/nagios/passwd nagiosadmin {{nagiosadmin_password}}
+
+    - name: Make sure httpd is installed
+      yum: name=httpd state=present
+
+    - name: Start nagios, httpd services and enable them on startup
+      service: name={{item}} state=restarted enabled=yes
+      with_items:
+        - httpd
+        - nagios
+
+    - name: Set setuid permissions on /usr/bin/ping to allow nagios user to execute ping
+      file: dest=/usr/bin/ping mode=04755
+
+    - name: Configure nagios to use clients.conf file
+      lineinfile: 
+        dest: /etc/nagios/nagios.cfg
+        insertafter: cfg_dir=.etc.nagios.conf.d
+        line: cfg_file=/etc/nagios/servers/clients.conf
+
+    - name: Create servers folder
+      file: dest=/etc/nagios/servers owner=nagios group=nagios mode=755 state=directory
+ 
+    - name: Configure server to monitor clients
+      template: src=nagios-clients.j2 dest=/etc/nagios/servers/clients.conf owner=nagios group=nagios mode=755
+
+    - name: Restart nagios on server to use new configuration
+      service: name=nagios state=restarted   
+      commands.cfg
+      
+      ===========================================================================================================================================================================
+      
+      The playbook requires 'commands.cfg' with following contents:
+
+cd /etc/ansible
+
+vi commands.cfg
+
+###############################################################################
+# COMMANDS.CFG - SAMPLE COMMAND DEFINITIONS FOR NAGIOS 4.0.8
+#
+#
+# NOTES: This config file provides you with some example command definitions
+#        that you can reference in host, service, and contact definitions.
+#       
+#        You don't need to keep commands in a separate file from your other
+#        object definitions.  This has been done just to make things easier to
+#        understand.
+#
+###############################################################################
+
+
+################################################################################
+#
+# SAMPLE NOTIFICATION COMMANDS
+#
+# These are some example notification commands.  They may or may not work on
+# your system without modification.  As an example, some systems will require 
+# you to use "/usr/bin/mailx" instead of "/usr/bin/mail" in the commands below.
+#
+################################################################################
+
+
+# 'notify-host-by-email' command definition
+define command{
+	command_name	notify-host-by-email
+	command_line	/usr/bin/printf "%b" "***** Nagios *****\n\nNotification Type: $NOTIFICATIONTYPE$\nHost: $HOSTNAME$\nState: $HOSTSTATE$\nAddress: $HOSTADDRESS$\nInfo: $HOSTOUTPUT$\n\nDate/Time: $LONGDATETIME$\n" | /usr/bin/mail -s "** $NOTIFICATIONTYPE$ Host Alert: $HOSTNAME$ is $HOSTSTATE$ **" $CONTACTEMAIL$
+	}
+
+# 'notify-service-by-email' command definition
+define command{
+	command_name	notify-service-by-email
+	command_line	/usr/bin/printf "%b" "***** Nagios *****\n\nNotification Type: $NOTIFICATIONTYPE$\n\nService: $SERVICEDESC$\nHost: $HOSTALIAS$\nAddress: $HOSTADDRESS$\nState: $SERVICESTATE$\n\nDate/Time: $LONGDATETIME$\n\nAdditional Info:\n\n$SERVICEOUTPUT$\n" | /usr/bin/mail -s "** $NOTIFICATIONTYPE$ Service Alert: $HOSTALIAS$/$SERVICEDESC$ is $SERVICESTATE$ **" $CONTACTEMAIL$
+	}
+
+
+
+
+
+################################################################################
+#
+# SAMPLE HOST CHECK COMMANDS
+#
+################################################################################
+
+
+# This command checks to see if a host is "alive" by pinging it
+# The check must result in a 100% packet loss or 5 second (5000ms) round trip 
+# average time to produce a critical error.
+# Note: Five ICMP echo packets are sent (determined by the '-p 5' argument)
+
+# 'check-host-alive' command definition
+define command{
+        command_name    check-host-alive
+        command_line    $USER1$/check_ping -H $HOSTADDRESS$ -w 3000.0,80% -c 5000.0,100% -p 5
+        }
+
+
+
+
+################################################################################
+#
+# SAMPLE SERVICE CHECK COMMANDS
+#
+# These are some example service check commands.  They may or may not work on
+# your system, as they must be modified for your plugins.  See the HTML 
+# documentation on the plugins for examples of how to configure command definitions.
+#
+# NOTE:  The following 'check_local_...' functions are designed to monitor
+#        various metrics on the host that Nagios is running on (i.e. this one).
+################################################################################
+
+# 'check_local_disk' command definition
+define command{
+        command_name    check_local_disk
+        command_line    $USER1$/check_disk -w $ARG1$ -c $ARG2$ -p $ARG3$
+        }
+
+
+# 'check_local_load' command definition
+define command{
+        command_name    check_local_load
+        command_line    $USER1$/check_load -w $ARG1$ -c $ARG2$
+        }
+
+
+# 'check_local_procs' command definition
+define command{
+        command_name    check_local_procs
+        command_line    $USER1$/check_procs -w $ARG1$ -c $ARG2$ -s $ARG3$
+        }
+
+
+# 'check_local_users' command definition
+define command{
+        command_name    check_local_users
+        command_line    $USER1$/check_users -w $ARG1$ -c $ARG2$
+        }
+
+
+# 'check_local_swap' command definition
+define command{
+	command_name	check_local_swap
+	command_line	$USER1$/check_swap -w $ARG1$ -c $ARG2$
+	}
+
+
+# 'check_local_mrtgtraf' command definition
+define command{
+	command_name	check_local_mrtgtraf
+	command_line	$USER1$/check_mrtgtraf -F $ARG1$ -a $ARG2$ -w $ARG3$ -c $ARG4$ -e $ARG5$
+	}
+
+
+################################################################################
+# NOTE:  The following 'check_...' commands are used to monitor services on
+#        both local and remote hosts.
+################################################################################
+
+# 'check_ftp' command definition
+define command{
+        command_name    check_ftp
+        command_line    $USER1$/check_ftp -H $HOSTADDRESS$ $ARG1$
+        }
+
+
+# 'check_hpjd' command definition
+define command{
+        command_name    check_hpjd
+        command_line    $USER1$/check_hpjd -H $HOSTADDRESS$ $ARG1$
+        }
+
+
+# 'check_snmp' command definition
+define command{
+        command_name    check_snmp
+        command_line    $USER1$/check_snmp -H $HOSTADDRESS$ $ARG1$
+        }
+
+
+# 'check_http' command definition
+define command{
+        command_name    check_http
+        command_line    $USER1$/check_http -I $HOSTADDRESS$ $ARG1$
+        }
+
+
+# 'check_ssh' command definition
+define command{
+	command_name	check_ssh
+	command_line	$USER1$/check_ssh $ARG1$ $HOSTADDRESS$
+	}
+
+
+# 'check_dhcp' command definition
+define command{
+	command_name	check_dhcp
+	command_line	$USER1$/check_dhcp $ARG1$
+	}
+
+
+# 'check_ping' command definition
+define command{
+        command_name    check_ping
+        command_line    $USER1$/check_ping -H $HOSTADDRESS$ -w $ARG1$ -c $ARG2$ -p 5
+        }
+
+
+# 'check_pop' command definition
+define command{
+        command_name    check_pop
+        command_line    $USER1$/check_pop -H $HOSTADDRESS$ $ARG1$
+        }
+
+
+# 'check_imap' command definition
+define command{
+        command_name    check_imap
+        command_line    $USER1$/check_imap -H $HOSTADDRESS$ $ARG1$
+        }
+
+
+# 'check_smtp' command definition
+define command{
+        command_name    check_smtp
+        command_line    $USER1$/check_smtp -H $HOSTADDRESS$ $ARG1$
+        }
+
+
+# 'check_tcp' command definition
+define command{
+	command_name	check_tcp
+	command_line	$USER1$/check_tcp -H $HOSTADDRESS$ -p $ARG1$ $ARG2$
+	}
+
+
+# 'check_udp' command definition
+define command{
+	command_name	check_udp
+	command_line	$USER1$/check_udp -H $HOSTADDRESS$ -p $ARG1$ $ARG2$
+	}
+
+
+# 'check_nt' command definition
+define command{
+	command_name	check_nt
+	command_line	$USER1$/check_nt -H $HOSTADDRESS$ -p 12489 -v $ARG1$ $ARG2$
+	}
+
+
+
+################################################################################
+#
+# SAMPLE PERFORMANCE DATA COMMANDS
+#
+# These are sample performance data commands that can be used to send performance
+# data output to two text files (one for hosts, another for services).  If you
+# plan on simply writing performance data out to a file, consider using the 
+# host_perfdata_file and service_perfdata_file options in the main config file.
+#
+################################################################################
+
+
+# 'process-host-perfdata' command definition
+define command{
+	command_name	process-host-perfdata
+	command_line	/usr/bin/printf "%b" "$LASTHOSTCHECK$\t$HOSTNAME$\t$HOSTSTATE$\t$HOSTATTEMPT$\t$HOSTSTATETYPE$\t$HOSTEXECUTIONTIME$\t$HOSTOUTPUT$\t$HOSTPERFDATA$\n" >> /var/log/nagios/host-perfdata.out
+	}
+
+
+# 'process-service-perfdata' command definition
+define command{
+	command_name	process-service-perfdata
+	command_line	/usr/bin/printf "%b" "$LASTSERVICECHECK$\t$HOSTNAME$\t$SERVICEDESC$\t$SERVICESTATE$\t$SERVICEATTEMPT$\t$SERVICESTATETYPE$\t$SERVICEEXECUTIONTIME$\t$SERVICELATENCY$\t$SERVICEOUTPUT$\t$SERVICEPERFDATA$\n" >> /var/log/nagios/service-perfdata.out
+	}
+
+
+define command{
+        command_name check_nrpe
+        command_line $USER1$/check_nrpe -H $HOSTADDRESS$ -c $ARG1$
+        }
+        
+        
+              ===========================================================================================================================================================================================
+              
+              The playbook also requires 'nagios-clients.j2' jinja2 script with following contents:
+
+cd /etc/ansible
+vi nagios-clients.js
+
+{% for nagios_client1 in nagios_client_details %}
+
+define host{
+	use                             linux-server
+	host_name                       {{nagios_client1.hostname}}
+	alias                           {{nagios_client1.alias}}
+	address                         {{nagios_client1.address}}
+	max_check_attempts              5
+	check_period                    24x7
+	notification_interval           30
+	notification_period             24x7
+}
+
+
+
+  {% for service1 in nagios_client1.services %}
+    {% if service1=="ping" %}
+	define service{
+        	use                             generic-service         ; Name of service template to use
+        	host_name                       {{nagios_client1.hostname}}
+        	service_description             PING
+        	check_command                   check_ping!100.0,20%!500.0,60%
+        	notifications_enabled           1
+        }
+    {% endif %}
+
+ 
+    {% if service1=="ssh" %}
+	define service {
+	        use                             generic-service
+	        host_name                       {{nagios_client1.hostname}}
+	        service_description             SSH
+	        check_command                   check_ssh
+	        notifications_enabled           1
+        }
+    {% endif %} 
+
+    {% if service1=="http" %}
+	define service {
+	        use                             generic-service
+	        host_name                       {{nagios_client1.hostname}}
+	        service_description             HTTP
+	        check_command                   check_http
+	        notifications_enabled           1
+        }
+    {% endif %} 
+
+    {% if service1=="nrpe_check_load" %}
+	define service {
+	        use                             generic-service
+	        host_name                       {{nagios_client1.hostname}}
+	        service_description             CPU Load
+	        check_command                   check_nrpe!check_load
+	        notifications_enabled           1
+        }
+    {% endif %} 
+
+    {% if service1=="nrpe_alias_cpu" %}
+	define service {
+	        use                             generic-service
+	        host_name                       {{nagios_client1.hostname}}
+	        service_description             CPU Load
+	        check_command                   check_nrpe!alias_cpu
+	        notifications_enabled           1
+        }
+    {% endif %} 
+
+
+  {% endfor %}
+{% endfor %}   
+
+      ===========================================================================================================================================================================
+
+To run the playbook hosts file similar to one shown below is required:
+
+vi /etc/ansible/hosts
+
+[nagios-server]
+server.example.com
+
+[nagios-client]
+client.example.com
