@@ -1,0 +1,90 @@
+centos7-cacti.yml
+
+---
+  - name: Playbook for installing cacti
+    hosts: cacti-hosts
+    remote_user: root
+
+    tasks:
+    - name: Setup epel-release repository
+      yum: name=epel-release state=present
+
+    - name: Install required packages
+      yum: name={{item}} state=present
+      with_items:
+      - httpd
+      - mariadb-server
+      - php-mysql
+      - php-pear
+      - php-common
+      - php-gd
+      - php
+      - php-mbstring
+      - php-cli
+      - php-snmp
+      - net-snmp-utils
+      - net-snmp-libs
+      - rrdtool 
+      - cacti
+      - mysql-connector-python #For ansible
+      - MySQL-python #For ansible
+ 
+    - name: Start and enable httpd, mariadb and snmpd
+      service: name={{item}} state=started enabled=yes
+      with_items:
+      - httpd
+      - mariadb
+      - snmpd
+      - crond
+  
+    - name: Create database for cacti
+      mysql_db: name=cacti state=present
+
+    - name: Get cacti sql file path
+      shell: rpm -ql cacti | grep cacti.sql
+      register: cacti_sql_path
+
+    - name: Restore cacti database
+      shell: mysql cacti < {{cacti_sql_path.stdout}}; touch /root/cacti_database_imported
+      args:
+        creates: /root/cacti_database_imported
+ 
+    - name: Set blank password for cacti in db.php
+      shell: sed -i 's/cactiuser//' /etc/cacti/db.php
+
+    - name: Set correct username for cacti in db.php
+      lineinfile:
+        dest: /etc/cacti/db.php
+        regexp: "database_username"
+        line: '$database_username = "root";'
+
+    - name: Allow access to cacti from everywhere
+      lineinfile: 
+        dest: /etc/httpd/conf.d/cacti.conf
+        insertafter: "Require host localhost"
+        line: "Require all granted" 
+      notify:
+      - restart httpd
+
+    - name: Enable cacti cron polling
+      copy: src=cacti dest=/etc/cron.d/cacti mode=644 owner=root group=root
+
+    - name: Print completion message
+      debug: msg="Open http://<server>/cacti and complete installation.  Login using admin:admin"
+
+    handlers:
+    - name: restart httpd
+      service: name=httpd state=restarted   
+      
+      ===========================================================================================================================================================================
+
+The playbook requires cron file named 'cacti' with following content:
+
+*/5 * * * *	cacti	/usr/bin/php /usr/share/cacti/poller.php > /dev/null 2>&1
+
+===============================================================================================================================================================================
+The playbook assumes hosts file similar to:
+
+cat /etc/ansible/hosts
+[cacti-hosts]
+192.168.122.67   
